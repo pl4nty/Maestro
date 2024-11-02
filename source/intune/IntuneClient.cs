@@ -1,4 +1,4 @@
-﻿using LiteDB;
+using LiteDB;
 using Newtonsoft.Json;
 using System;
 using System.Collections;
@@ -1315,6 +1315,83 @@ namespace Maestro
                 return;
             }
             Logger.Info("Successfully sent request for device sync notification");
+        }
+
+        public async Task<string> CreateCustomConfigPolicy(string deviceId, string sasUrl, string[] registryKeys, string[] events, string[] commands, string[] folderFiles, string outputFileFormat)
+        {
+            Logger.Info($"Creating custom config policy for device: {deviceId}");
+            string url = "https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations";
+
+            var archiveDefinition = new
+            {
+                sasUrl,
+                registryKeys,
+                events,
+                commands,
+                folderFiles,
+                outputFileFormat
+            };
+
+            var stringwriter = new System.IO.StringWriter();
+            var serializer = new XmlSerializer(archiveDefinition.GetType());
+            serializer.Serialize(stringwriter, archiveDefinition);
+
+            var content = HttpHandler.CreateJsonContent(new
+            {
+                displayName = "Custom Config Policy",
+                description = "Custom config policy for device",
+                omaSettings = new[]
+                {
+                    new
+                    {
+                        omaUri = "./Vendor/MSFT/DiagnosticLog/DiagnosticArchive/ArchiveDefinition",
+                        value = stringwriter.ToString();
+                    }
+                }
+            });
+
+            HttpResponseMessage response = await HttpHandler.PostAsync(url, content);
+            if (response.StatusCode != HttpStatusCode.Created)
+            {
+                Logger.Error("Failed to create custom config policy");
+                return null;
+            }
+
+            string responseContent = await response.Content.ReadAsStringAsync();
+            string policyId = StringHandler.GetMatch(responseContent, "\"id\":\"([^\"]+)\"");
+            Logger.Info($"Obtained policy ID: {policyId}");
+            return policyId;
+        }
+
+        public async Task<bool> AssignPolicyWithFilter(string policyId, string filterId)
+        {
+            Logger.Info($"Assigning policy {policyId} with filter {filterId}");
+            string url = $"https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations/{policyId}/assign";
+
+            var content = HttpHandler.CreateJsonContent(new
+            {
+                assignments = new[]
+                {
+                    new
+                    {
+                        target = new
+                        {
+                            deviceAndAppManagementAssignmentFilterId = filterId,
+                            deviceAndAppManagementAssignmentFilterType = "include"
+                        }
+                    }
+                }
+            });
+
+            HttpResponseMessage response = await HttpHandler.PostAsync(url, content);
+            if (response.StatusCode != HttpStatusCode.OK)
+            {
+                Logger.Error($"Failed to assign policy: {response.StatusCode} {response.Content}");
+                return false;
+            }
+
+            Logger.Info("Successfully assigned policy with filter");
+            return true;
         }
     }
 }
